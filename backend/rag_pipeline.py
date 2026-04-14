@@ -84,18 +84,20 @@ class RAGPipeline:
 
     def create_vectorstore(self, documents: List[str], collection_name: str = "sustainability") -> bool:
         """
-        Create vector store from documents.
-
-        Args:
-            documents: List of document texts
-            collection_name: Name of the collection
-
-        Returns:
-            True if successful, False otherwise
+        Create vector store from documents, replacing any existing collection.
         """
         try:
             if not self.embeddings:
                 self.initialize_embeddings()
+
+            # Delete existing collection to prevent stale data from prior uploads
+            try:
+                import chromadb
+                client = chromadb.PersistentClient(path=self.vectorstore_dir)
+                client.delete_collection(collection_name)
+                self.logger.info(f"Deleted existing collection: {collection_name}")
+            except Exception:
+                pass  # Collection may not exist yet
 
             self.vectorstore = Chroma.from_texts(
                 texts=documents,
@@ -103,7 +105,6 @@ class RAGPipeline:
                 collection_name=collection_name,
                 persist_directory=self.vectorstore_dir,
             )
-            self.vectorstore.persist()
             self.logger.info(f"Vector store created with {len(documents)} documents")
             return True
 

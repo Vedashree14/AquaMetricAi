@@ -25,7 +25,7 @@ class Config:
     
     # Groq/Grok
     GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-    GROQ_MODEL = os.getenv('GROQ_MODEL', 'grok-beta')
+    GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant')
     
     # LLM Provider: 'openai' or 'groq' (groq if no openai key)
     @property
@@ -50,7 +50,7 @@ class Config:
     ALLOWED_EXTENSIONS = {'pdf'}
 
     def validate(self):
-        \"\"\"Validate configuration.\"\"\"
+        """Validate configuration."""
         if self.LLM_PROVIDER == 'openai' and not self.OPENAI_API_KEY:
             raise ValueError('OPENAI_API_KEY required for OpenAI')
         if self.LLM_PROVIDER == 'groq' and not self.GROQ_API_KEY:

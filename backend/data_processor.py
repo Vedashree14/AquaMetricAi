@@ -61,9 +61,9 @@ class DataProcessor:
         # Handle missing values
         for col in df.columns:
             if df[col].dtype == "object":
-                df[col].fillna("Unknown", inplace=True)
+                df[col] = df[col].fillna("Unknown")
             else:
-                df[col].fillna(df[col].mean(), inplace=True)
+                df[col] = df[col].fillna(df[col].mean())
 
         # Remove duplicates
         df.drop_duplicates(inplace=True)
@@ -130,7 +130,7 @@ class DataProcessor:
                 "high": 2,
                 "unknown": 1
             }
-            risk_score += stress_map.get(water_stress.lower(), 1)
+            risk_score += stress_map.get((water_stress or 'unknown').lower(), 1)
 
             if risk_score >= 3:
                 return "High"

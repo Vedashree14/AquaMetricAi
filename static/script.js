@@ -27,8 +27,11 @@ function initializeUploadArea() {
     // File input change
     fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
+            const file = e.target.files[0];
             analyzeBtn.disabled = false;
             uploadArea.style.borderColor = 'var(--success-color)';
+            uploadArea.querySelector('p').textContent = `✅ ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+        uploadArea.querySelector('.upload-hint') && (uploadArea.querySelector('.upload-hint').textContent = 'Click Analyze PDF to continue');
         }
     });
 
@@ -51,6 +54,8 @@ function initializeUploadArea() {
             fileInput.files = files;
             analyzeBtn.disabled = false;
             uploadArea.style.borderColor = 'var(--success-color)';
+            uploadArea.querySelector('p').textContent = `✅ ${files[0].name} (${(files[0].size / 1024).toFixed(1)} KB)`;
+            uploadArea.querySelector('.upload-hint') && (uploadArea.querySelector('.upload-hint').textContent = 'Click Analyze PDF to continue');
         }
     });
 }
@@ -127,10 +132,14 @@ async function analyzeFile() {
 
 function displayResults(data) {
     // Display metrics
-    document.getElementById('waterUsage').textContent = formatValue(data.water_usage);
+    document.getElementById('waterUsage').textContent = formatValue(data.water_usage, true);
     document.getElementById('wueValue').textContent = formatValue(data.WUE);
-    document.getElementById('regionValue').textContent = data.region || 'Unknown';
-    document.getElementById('riskLevel').textContent = data.risk_level || 'Unknown';
+    const region = data.region || 'Unknown';
+    document.getElementById('regionValue').textContent = region.length > 30 ? region.substring(0, 30) + '...' : region;
+    document.getElementById('regionValue').title = region;
+    const risk = data.risk_level || 'Unknown';
+    const riskShort = risk.includes('High') ? 'High' : risk.includes('Low') ? 'Low' : risk.includes('Medium') ? 'Medium' : risk;
+    document.getElementById('riskLevel').textContent = riskShort;
 
     // Update risk level color
     updateRiskLevelColor(data.risk_level);
@@ -142,21 +151,11 @@ function displayResults(data) {
     createCharts(data);
 }
 
-function formatValue(value) {
-    if (value === null || value === undefined || value === 'Unknown') {
-        return '-';
-    }
-
-    // Try to parse as number
+function formatValue(value, isWater = false) {
+    if (value === null || value === undefined || value === 'Unknown') return '-';
     const num = parseFloat(value);
-    if (isNaN(num)) {
-        return String(value).substring(0, 50);
-    }
-
-    // Format with appropriate decimals
-    if (num >= 1000) {
-        return (num / 1000).toFixed(1) + 'K';
-    }
+    if (isNaN(num)) return String(value).substring(0, 50);
+    if (isWater) return num.toLocaleString(undefined, { maximumFractionDigits: 1 });
     return num.toFixed(2);
 }
 
@@ -198,7 +197,7 @@ function displayRecommendations(recommendations) {
         card.innerHTML = `
             <h4>${escapeHtml(strategy)}</h4>
             <p class="description">${escapeHtml(description)}</p>
-            <div class="impact">Estimated Impact: ${escapeHtml(String(impact))}</div>
+            <div class="impact">Estimated Impact: ${escapeHtml(String(impact).replace('%',''))}%</div>
         `;
 
         list.appendChild(card);
@@ -250,16 +249,17 @@ function createImpactChart(recommendations) {
                 label: 'Water Reduction %',
                 data: impacts,
                 backgroundColor: [
-                    'rgba(0, 168, 232, 0.8)',
-                    'rgba(0, 201, 255, 0.8)',
-                    'rgba(146, 231, 228, 0.8)',
+                    'rgba(59, 130, 246, 0.7)',
+                    'rgba(16, 185, 129, 0.7)',
+                    'rgba(139, 92, 246, 0.7)',
                 ],
                 borderColor: [
-                    '#00a8e8',
-                    '#00c9ff',
-                    '#92e7e4',
+                    '#3b82f6',
+                    '#10b981',
+                    '#8b5cf6',
                 ],
                 borderWidth: 2,
+                borderRadius: 6,
             }],
         },
         options: {
@@ -269,10 +269,8 @@ function createImpactChart(recommendations) {
                 legend: {
                     display: true,
                     labels: {
-                        color: '#666',
-                        font: {
-                            size: 12,
-                        },
+                        color: '#8b949e',
+                        font: { size: 12 },
                     },
                 },
             },
@@ -280,20 +278,12 @@ function createImpactChart(recommendations) {
                 y: {
                     beginAtZero: true,
                     max: 100,
-                    ticks: {
-                        color: '#666',
-                    },
-                    grid: {
-                        color: 'rgba(0, 0, 0, 0.05)',
-                    },
+                    ticks: { color: '#8b949e' },
+                    grid: { color: 'rgba(255,255,255,0.05)' },
                 },
                 x: {
-                    ticks: {
-                        color: '#666',
-                    },
-                    grid: {
-                        display: false,
-                    },
+                    ticks: { color: '#8b949e' },
+                    grid: { display: false },
                 },
             },
         },
@@ -320,8 +310,8 @@ function createWaterChart(data) {
             datasets: [{
                 data: [waterUsageNum, reduction],
                 backgroundColor: [
-                    'rgba(239, 68, 68, 0.8)',
-                    'rgba(16, 185, 129, 0.8)',
+                    'rgba(239, 68, 68, 0.75)',
+                    'rgba(16, 185, 129, 0.75)',
                 ],
                 borderColor: [
                     '#ef4444',
@@ -338,10 +328,8 @@ function createWaterChart(data) {
                     display: true,
                     position: 'bottom',
                     labels: {
-                        color: '#666',
-                        font: {
-                            size: 12,
-                        },
+                        color: '#8b949e',
+                        font: { size: 12 },
                         padding: 15,
                     },
                 },
@@ -355,8 +343,7 @@ function createWaterChart(data) {
 // ============================================
 
 function showLoading() {
-    document.getElementById('uploadArea').parentElement.style.display = 'none';
-    document.getElementById('analyzeBtn').style.display = 'none';
+    document.getElementById('uploadSection').classList.add('hidden');
     document.getElementById('loadingState').classList.remove('hidden');
     document.getElementById('resultsSection').classList.add('hidden');
     document.getElementById('errorSection').classList.add('hidden');
@@ -376,34 +363,25 @@ function showError(message) {
 }
 
 function resetAnalysis() {
-    // Reset file input
     document.getElementById('fileInput').value = '';
 
-    // Show upload area
-    document.getElementById('uploadArea').parentElement.style.display = 'block';
-    document.getElementById('analyzeBtn').style.display = 'inline-block';
+    // Restore upload section
+    document.getElementById('uploadSection').classList.remove('hidden');
     document.getElementById('analyzeBtn').disabled = true;
 
-    // Reset upload area styling
+    // Reset upload area text and styling
     const uploadArea = document.getElementById('uploadArea');
-    uploadArea.style.borderColor = 'var(--primary-color)';
+    uploadArea.style.borderColor = '';
+    uploadArea.querySelector('p').textContent = 'Drag and drop your PDF here';
+    uploadArea.querySelector('.upload-hint').textContent = 'or click to select';
 
-    // Hide results
     document.getElementById('loadingState').classList.add('hidden');
     document.getElementById('resultsSection').classList.add('hidden');
     document.getElementById('errorSection').classList.add('hidden');
 
-    // Reset charts
-    if (impactChart) {
-        impactChart.destroy();
-        impactChart = null;
-    }
-    if (waterChart) {
-        waterChart.destroy();
-        waterChart = null;
-    }
+    if (impactChart) { impactChart.destroy(); impactChart = null; }
+    if (waterChart) { waterChart.destroy(); waterChart = null; }
 
-    // Clear data
     analysisData = null;
 }
 
