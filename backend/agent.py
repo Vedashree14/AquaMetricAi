@@ -25,15 +25,18 @@ TASK: Extract the following fields from the provided report sections.
 - These are DIFFERENT numbers — always pick the LARGEST gross withdrawal figure.
 
 UNIT CONVERSIONS (memorize these):
-  • "X billion liters"        → X × 1,000        (3.72 billion liters = 3,720 ML)
-  • "X million liters"        → X ÷ 1,000        (3,720 million liters = 3,720 ML)  
-  • "X ML" or "X megalitres"  → X                (no conversion)
-  • "X cubic meters (m³)"     → X ÷ 1,000        (3,720,000 m³ = 3,720 ML)
-  • "X thousand m³"           → X                (3,720 thousand m³ = 3,720 ML)
-  • "X gallons"               → X ÷ 264,172      (rare, convert to ML)
+  • "X billion liters"           → X × 1,000        (8.3 billion liters = 8,300 ML)
+  • "X million liters"           → X                (no conversion: 1 million liters = 1 ML)
+  • "X ML" or "X megalitres"     → X                (no conversion)
+  • "X gigalitres" or "X GL"     → X × 1,000        (8.3 GL = 8,300 ML)
+  • "X thousand cubic meters"    → X                (no conversion: 1 thousand m³ = 1 ML)
+  • "X cubic meters"             → X ÷ 1,000        (8,300,000 m³ = 8,300 ML)
+  • "X million gallons"          → X × 3.785        (8,653 million gallons = 32,740 ML)
+  • "X billion gallons"          → X × 3,785        (rare)
 
-SANITY CHECK: Large tech companies (Google, Meta, Microsoft, Amazon) withdraw 1,000–15,000 ML/year.
-If your answer is above 50,000 ML, you made a unit error. Recheck and fix it.
+SANITY CHECK: Large tech companies (Google, Meta, Microsoft, Amazon) withdraw 1,000–35,000 ML/year.
+If your answer is above 100,000 ML, you made a unit error. Recheck and fix it.
+NOTE: Google reports in million gallons. 8,653 million gallons = 32,740 ML.
 
 ━━━ FIELD 2: WUE (Water Usage Effectiveness in L/kWh) ━━━
 - Look for "WUE", "water usage effectiveness", "liters per kilowatt-hour"
@@ -64,71 +67,148 @@ Return ONLY valid JSON, no markdown, no extra text:
 }}"""
 
 
-# Regex patterns to extract water withdrawal directly from PDF text
-# Ordered from most specific to least specific
+# ---------------------------------------------------------------------------
+# Withdrawal patterns — tuples of (regex, unit_type)
+# Ordered most-specific first. unit_type drives conversion to ML.
+# IMPORTANT: PyMuPDF extracts PDF tables with \n between each cell,
+# so patterns must use [\s\n]+ as separator between label, unit, and values.
+# ---------------------------------------------------------------------------
 WITHDRAWAL_PATTERNS = [
-    # "8,300 ML" / "8300 ML" / "8,300 megalitres"
-    r'total\s+water\s+withdrawal[^\d]{0,60}([\d,]+\.?\d*)\s*(ML|megalitres?|megaliter)',
-    # "8.3 billion liters" total withdrawal
-    r'total\s+water\s+withdrawal[^\d]{0,60}([\d,]+\.?\d*)\s*billion\s+lit(?:re|er)',
-    # "8,300,000 cubic meters" total withdrawal  
-    r'total\s+water\s+withdrawal[^\d]{0,60}([\d,]+\.?\d*)\s*(?:thousand\s+)?(?:cubic\s+meters?|m³)',
-    # Standalone "water withdrawal: 8,300 ML"
-    r'water\s+withdrawal[^\d]{0,40}([\d,]+\.?\d*)\s*(ML|megalitres?|megaliter)',
-    # "withdrew X billion liters"
-    r'withdre[aw]+[^\d]{0,40}([\d,]+\.?\d*)\s*billion\s+lit(?:re|er)',
+    # ── Microsoft format: interleaved consumed/withdrawn pairs with A/B labels ────
+    # Structure: Consumed\nA\nWithdrawn\nB\n<c1>\n<w1>\n...\n<cN>\n<wN>\nA\nA...\nB\nB...
+    # Withdrawn values are at even positions (w1,w2...) — last wN is most recent
+    # Pattern: capture everything between 'withdrawn\nb\n' and 'a\na' block, take last number
+    (r'withdrawn[\s\n]+b[\s\n]+((?:[\d,]+\.?\d*[\s\n]+){2,20})a[\s\n]+a', 'ms_pairs'),
+    (r'water\s+withdrawal[\s\n]+million\s+gall?ons?[\s\n]+([\d,]+\.?\d*[\s\n]+){1,4}([\d,]+\.?\d*)', 'mgal_nl'),
+    # "Water withdrawal\nThousand cubic meters\n...\n45231"
+    (r'water\s+withdrawal[\s\n]+thousand\s+cubic\s+met(?:re|er)s?[\s\n]+([\d,]+\.?\d*[\s\n]+){1,4}([\d,]+\.?\d*)', 'tcm_nl'),
+    # "Water withdrawal\nMegalitres\n...\n5637"
+    (r'water\s+withdrawal[\s\n]+(?:ML|megalitres?|megaliters?)[\s\n]+([\d,]+\.?\d*[\s\n]+){1,4}([\d,]+\.?\d*)', 'ml_nl'),
+    # "Water withdrawal\nMillion liters\n...\n12500"
+    (r'water\s+withdrawal[\s\n]+million\s+lit(?:re|er)s?[\s\n]+([\d,]+\.?\d*[\s\n]+){1,4}([\d,]+\.?\d*)', 'mliter_nl'),
+    # "Total water withdrawal\n3726\n5042\n4893\n5274\n5637"  (no unit row)
+    (r'total\s+water\s+withdrawal[\s\n]+([\d,]+\.?\d*[\s\n]+){1,4}([\d,]+\.?\d*)', 'ml_nl'),
+
+    # ── Space-separated table rows (some PDFs) ───────────────────────────────
+    (r'water\s+withdrawal\s+million\s+gall?ons?\s+[\d,.]+(?:\s+[\d,.]+){1,3}\s+([\d,]+\.?\d*)', 'mgal'),
+    (r'water\s+withdrawal\s+thousand\s+cubic\s+met(?:re|er)s?\s+[\d,.]+(?:\s+[\d,.]+){1,3}\s+([\d,]+\.?\d*)', 'tcm'),
+    (r'total\s+water\s+withdrawal\s+[\d,.]+(?:\s+[\d,.]+){1,3}\s+([\d,]+\.?\d*)', 'ml'),
+
+    # ── Inline with explicit unit ────────────────────────────────────────────
+    (r'total\s+water\s+withdrawal[^\d]{0,80}([\d,]+\.?\d*)\s*(?:ML|megalitres?|megaliters?)', 'ml'),
+    (r'total\s+water\s+withdrawal[^\d]{0,80}([\d,]+\.?\d*)\s*million\s+gall?ons?', 'mgal'),
+    (r'total\s+water\s+withdrawal[^\d]{0,80}([\d,]+\.?\d*)\s*billion\s+lit(?:re|er)', 'bliter'),
+    (r'total\s+water\s+withdrawal[^\d]{0,80}([\d,]+\.?\d*)\s*billion\s+gall?ons?', 'bgal'),
+    (r'total\s+water\s+withdrawal[^\d]{0,80}([\d,]+\.?\d*)\s*thousand\s+(?:cubic\s+met(?:re|er)s?|m\s*3|m\u00b3)', 'tcm'),
+    (r'total\s+water\s+withdrawal[^\d]{0,80}([\d,]+\.?\d*)\s*(?:cubic\s+met(?:re|er)s?|m\s*3|m\u00b3)', 'cm'),
+    (r'total\s+water\s+withdrawal[^\d]{0,80}([\d,]+\.?\d*)\s*million\s+lit(?:re|er)', 'mliter'),
+    (r'total\s+water\s+withdrawal[^\d]{0,80}([\d,]+\.?\d*)\s*(?:GL|gigalit(?:re|er))', 'gl'),
+
+    # ── Fallback: "water withdrawal" without "total" ──────────────────────────
+    (r'water\s+withdrawal[^\d]{0,60}([\d,]+\.?\d*)\s*(?:ML|megalitres?|megaliters?)', 'ml'),
+    (r'water\s+withdrawal[^\d]{0,60}([\d,]+\.?\d*)\s*million\s+gall?ons?', 'mgal'),
+    (r'water\s+withdrawal[^\d]{0,60}([\d,]+\.?\d*)\s*billion\s+lit(?:re|er)', 'bliter'),
+    (r'water\s+withdrawal[^\d]{0,60}([\d,]+\.?\d*)\s*thousand\s+(?:cubic\s+met(?:re|er)s?|m\s*3|m\u00b3)', 'tcm'),
+    (r'water\s+withdrawal[^\d]{0,60}([\d,]+\.?\d*)\s*(?:cubic\s+met(?:re|er)s?|m\s*3|m\u00b3)', 'cm'),
+    (r'water\s+withdrawal[^\d]{0,60}([\d,]+\.?\d*)\s*million\s+lit(?:re|er)', 'mliter'),
 ]
 
+# WUE patterns — newline-separated first, then inline
 WUE_PATTERNS = [
-    r'WUE[^\d]{0,30}([\d]+\.[\d]+)\s*(?:L/kWh|liters?\s+per\s+kilowatt)',
-    r'water\s+usage\s+effectiveness[^\d]{0,40}([\d]+\.[\d]+)',
-    r'([\d]+\.[\d]+)\s*(?:L/kWh|liters?\s+per\s+kilowatt)',
+    # "Annual data center WUE\n0.30\n0.26\n0.20\n0.18\n0.19"  (newline-separated, take last)
+    r'(?:annual\s+data\s+center\s+)?wue[\s\n]+[\d.]+(?:[\s\n]+[\d.]+){1,4}[\s\n]+([\d]+\.[\d]+)',
+    # "WUE\n0.26\n" (single value after label)
+    r'wue[\s\n]+([\d]+\.[\d]+)',
+    # "WUE 0.26 L/kWh"  (inline with unit)
+    r'wue[^\d]{0,30}([\d]+\.[\d]+)\s*(?:l/kwh|liters?\s+per\s+kilowatt)',
+    # "water usage effectiveness ... 0.26"
+    r'water\s+usage\s+effectiveness[^\d]{0,60}([\d]+\.[\d]+)',
+    # "0.26 L/kWh"  (standalone — last resort)
+    r'([\d]+\.[\d]+)\s*(?:l/kwh|liters?\s+per\s+kilowatt)',
 ]
+
+
+def _to_ml(value: float, unit_type: str) -> float:
+    """Convert a numeric value to megalitres based on unit_type."""
+    base = unit_type.replace('_nl', '').replace('_last', '')
+    if base == 'ml':      return value
+    if base == 'mgal':    return round(value * 3.78541, 2)
+    if base == 'bgal':    return round(value * 3785.41, 2)
+    if base == 'bliter':  return value * 1000
+    if base == 'mliter':  return value
+    if base == 'kliter':  return value / 1000
+    if base == 'tcm':     return value
+    if base == 'cm':      return value / 1000
+    if base == 'gl':      return value * 1000
+    if base == 'ms':      return value / 1000   # Microsoft cubic meters
+    return value
 
 
 def _extract_water_withdrawal_regex(text: str) -> Optional[float]:
     """
-    Deterministic regex extraction of total water withdrawal from PDF text.
+    Deterministic regex extraction of total water withdrawal.
     Returns value in ML, or None if not found.
+    Handles newline-separated PDF table cells (PyMuPDF) and inline formats.
+    Covers: Google (million gallons), Meta (ML), Microsoft/Amazon (thousand m³),
+    Apple (million liters), and generic formats.
     """
     text_lower = text.lower()
 
-    for pattern in WITHDRAWAL_PATTERNS:
-        match = re.search(pattern, text_lower, re.IGNORECASE)
-        if match:
-            raw = match.group(1).replace(',', '')
+    for pattern, unit_type in WITHDRAWAL_PATTERNS:
+        match = re.search(pattern, text_lower, re.IGNORECASE | re.DOTALL)
+        if not match:
+            continue
+
+        # ms_pairs: interleaved consumed/withdrawn — withdrawn are at even indices (0-based: 1,3,5...)
+        if unit_type == 'ms_pairs':
+            nums = re.findall(r'[\d,]+\.?\d*', match.group(1))
+            # withdrawn values are at odd indices (1,3,5...) since consumed comes first
+            withdrawn = [nums[i] for i in range(1, len(nums), 2)]
+            if not withdrawn:
+                continue
             try:
-                value = float(raw)
+                raw_value = float(withdrawn[-1].replace(',', ''))
             except ValueError:
                 continue
-
-            full_match = match.group(0).lower()
-
-            # Apply unit conversion based on what was matched
-            if 'billion' in full_match:
-                value = value * 1000          # billion liters → ML
-            elif 'thousand cubic' in full_match or 'thousand m' in full_match:
-                pass                           # thousand m³ = ML already
-            elif 'cubic meter' in full_match or 'm³' in full_match:
-                value = value / 1000           # m³ → ML
-            # ML / megalitres: no conversion needed
-
-            # Sanity check
-            if 100 <= value <= 100_000:
-                logger.info(f"Regex extracted water withdrawal: {value} ML (pattern: {pattern[:50]})")
+            value = raw_value / 1000  # cubic meters to ML
+            if 100 <= value <= 200_000:
+                logger.info(f"Regex extracted water withdrawal: {value} ML [ms_pairs, raw={raw_value}]")
                 return value
+            continue
+
+        # _nl patterns: group(1) = repeated intermediate values, group(2) = last value
+        if unit_type.endswith('_nl'):
+            try:
+                raw_value = float(match.group(2).replace(',', ''))
+            except (ValueError, IndexError):
+                continue
+        else:
+            try:
+                raw_value = float(match.group(1).replace(',', ''))
+            except (ValueError, IndexError):
+                continue
+
+        value = _to_ml(raw_value, unit_type)
+
+        if 100 <= value <= 200_000:
+            logger.info(
+                f"Regex extracted water withdrawal: {value} ML "
+                f"[{unit_type}, raw={raw_value}] pattern='{pattern[:70]}'"
+            )
+            return value
 
     return None
 
 
 def _extract_wue_regex(text: str) -> Optional[float]:
     """Deterministic regex extraction of WUE from PDF text."""
+    text_lower = text.lower()
     for pattern in WUE_PATTERNS:
-        match = re.search(pattern, text, re.IGNORECASE)
+        match = re.search(pattern, text_lower, re.IGNORECASE | re.MULTILINE)
         if match:
             try:
                 value = float(match.group(1))
-                if 0.05 <= value <= 5.0:  # sane WUE range
+                if 0.05 <= value <= 5.0:
                     logger.info(f"Regex extracted WUE: {value}")
                     return value
             except ValueError:
@@ -225,6 +305,15 @@ REPORT BEGINNING (company/region context):
                 self.logger.error("Invalid response structure from LLM")
                 return None
 
+            # Clamp recommendation impact values to sane range (5-40%)
+            for rec in result.get("recommendations", []):
+                try:
+                    impact = float(str(rec.get("impact", 10)))
+                    if impact > 40 or impact < 1:
+                        rec["impact"] = str(min(40, max(5, round(impact % 40) or 15)))
+                except (ValueError, TypeError):
+                    rec["impact"] = "15"
+
             # ── Override with regex extraction if available ──
             # Regex is deterministic and more reliable than LLM for specific numbers
             regex_withdrawal = _extract_water_withdrawal_regex(pdf_text)
@@ -244,10 +333,10 @@ REPORT BEGINNING (company/region context):
                     self.logger.info(f"Overriding LLM WUE ({llm_wue}) with regex value ({regex_wue})")
                     result["WUE"] = str(regex_wue)
 
-            # Final sanity check: if still > 50,000 ML, LLM returned liters not ML
+            # Final sanity check: if > 200,000 ML the LLM returned raw liters
             try:
                 wu = float(result["water_usage"])
-                if wu > 50_000:
+                if wu > 200_000:
                     corrected = round(wu / 1_000, 2)
                     self.logger.warning(f"Sanity correction: {wu} → {corrected} ML")
                     result["water_usage"] = str(corrected)
